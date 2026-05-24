@@ -87,7 +87,7 @@ export async function getExistingTask(bugId) {
  * @param {string} [description] - Optional pre-formatted description (overrides default formatting)
  * @returns {Promise<string>} The created ClickUp Task ID
  */
-export async function createDefectTask(bugDetails, description) {
+export async function createDefectTask(bugDetails, description, customTaskName) {
   validateEnv();
 
   const url = `https://api.clickup.com/api/v2/list/${CLICKUP_LIST_ID}/task`;
@@ -109,7 +109,7 @@ Actual Result:
 ${bugDetails.actual}`;
 
   const requestBody = {
-    name: `${bugDetails.id} - ${bugDetails.title}`,
+    name: customTaskName || `${bugDetails.id} - ${bugDetails.title}`,
     description: taskDescription,
     status: 'to do',
     priority: 2 // 2 corresponds to "High" priority in ClickUp
