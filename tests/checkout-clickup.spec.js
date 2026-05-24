@@ -1,7 +1,11 @@
 import { test, expect } from '@playwright/test';
-import { createDefectTask, uploadAttachment } from '../utils/clickup.js';
+import { createDefectTask, uploadAttachment, getExistingTask, updateDefectTask } from '../utils/clickup.js';
+import { uploadFile } from '../utils/minio.js';
 import fs from 'fs';
 import path from 'path';
+
+// Enable Playwright native video recording for this test file
+test.use({ video: 'on' });
 
 // Page configuration constants
 const TEST_URL = 'https://www.saucedemo.com/';
@@ -30,15 +34,15 @@ const BUG_INFO = {
   severity: 'High',
   priority: 'High',
   module: 'Checkout',
-  environment: 'Chromium Browser / SauceDemo',
+  environment: 'Chromium Browser / SauceDemo Web App',
   steps: [
     'Login using problem_user',
     'Add item to cart',
     'Open checkout page',
     'Attempt to input Last Name'
   ],
-  expected: 'Last Name field accepts input normally.',
-  actual: 'Last Name field does not accept input.'
+  expected: 'All checkout fields should accept input normally.',
+  actual: 'The Last Name field does not accept input for problem_user.'
 };
 
 /**
@@ -90,32 +94,71 @@ async function verifyFileStability(filePath, maxRetries = 10, intervalMs = 200) 
   throw new Error(`File at ${filePath} did not stabilize in time or is empty.`);
 }
 
+/**
+ * Builds a structured defect description including evidence URLs and timestamp.
+ * @param {Object} bugInfo - Bug details object
+ * @param {string} screenshotUrl - Presigned MinIO URL for the screenshot
+ * @param {string} videoUrl - Presigned MinIO URL for the video
+ * @param {string} timestamp - Automation run timestamp
+ * @returns {string} Formatted description
+ */
+function buildDefectDescription(bugInfo, screenshotUrl, videoUrl, timestamp) {
+  return `Bug ID: ${bugInfo.id}
+Title: ${bugInfo.title}
+Module: ${bugInfo.module}
+Severity: ${bugInfo.severity}
+Priority: ${bugInfo.priority}
+Environment: ${bugInfo.environment}
+
+Steps to Reproduce:
+${bugInfo.steps.map((step, idx) => `${idx + 1}. ${step}`).join('\n')}
+
+Expected Result:
+${bugInfo.expected}
+
+Actual Result:
+${bugInfo.actual}
+
+---
+Evidence (auto-generated):
+
+Screenshot Evidence URL:
+${screenshotUrl}
+
+Video Evidence URL:
+${videoUrl}
+
+Automation Timestamp: ${timestamp}`;
+}
+
 test('SauceDemo Checkout - Detect Last Name Field Bug and Create ClickUp Defect', async ({ page }) => {
+  // Increase timeout to 120s to accommodate MinIO uploads + ClickUp API calls
+  test.setTimeout(120000);
   // 1. Open SauceDemo website
-  console.log(`Navigating to ${TEST_URL}...`);
+  console.log(`[Step 1] Navigating to ${TEST_URL}...`);
   await page.goto(TEST_URL);
 
   // 2. Login using problem_user and secret_sauce
-  console.log(`Logging in as '${CREDENTIALS.username}'...`);
+  console.log(`[Step 2] Logging in as '${CREDENTIALS.username}'...`);
   await page.locator(SELECTORS.usernameInput).fill(CREDENTIALS.username);
   await page.locator(SELECTORS.passwordInput).fill(CREDENTIALS.password);
   await page.locator(SELECTORS.loginButton).click();
 
   // Verify login succeeded and inventory is displayed
   await expect(page).toHaveURL(/inventory\.html/);
-  console.log('Login successful, inventory page loaded.');
+  console.log('[Step 2] Login successful, inventory page loaded.');
 
   // 3. Add one product to cart
-  console.log('Adding product to cart...');
+  console.log('[Step 3] Adding product to cart...');
   await page.locator(SELECTORS.addToCartBackpack).click();
 
   // 4. Open the cart page
-  console.log('Navigating to shopping cart...');
+  console.log('[Step 4] Navigating to shopping cart...');
   await page.locator(SELECTORS.shoppingCartLink).click();
   await expect(page).toHaveURL(/cart\.html/);
 
   // 5. Proceed to checkout
-  console.log('Proceeding to Checkout step one...');
+  console.log('[Step 5] Proceeding to Checkout step one...');
   await page.locator(SELECTORS.checkoutButton).click();
   await expect(page).toHaveURL(/checkout-step-one\.html/);
 
@@ -124,7 +167,7 @@ test('SauceDemo Checkout - Detect Last Name Field Bug and Create ClickUp Defect'
   const testLastName = 'Doe';
   const testPostalCode = '12345';
 
-  console.log('Filling out Checkout Form...');
+  console.log('[Step 6] Filling out Checkout Form...');
   await page.locator(SELECTORS.firstNameInput).fill(testFirstName);
   
   // Try to fill Last Name
@@ -136,51 +179,121 @@ test('SauceDemo Checkout - Detect Last Name Field Bug and Create ClickUp Defect'
 
   // 7. Verify whether the Last Name field accepted input
   const enteredLastName = await lastNameField.inputValue();
-  console.log(`[Form Verification] First Name: '${testFirstName}'`);
-  console.log(`[Form Verification] Expected Last Name: '${testLastName}' | Actual Field Value: '${enteredLastName}'`);
-  console.log(`[Form Verification] Postal Code: '${testPostalCode}'`);
+  console.log(`[Step 7] [Form Verification] First Name: '${testFirstName}'`);
+  console.log(`[Step 7] [Form Verification] Expected Last Name: '${testLastName}' | Actual Field Value: '${enteredLastName}'`);
+  console.log(`[Step 7] [Form Verification] Postal Code: '${testPostalCode}'`);
 
   const isDefectDetected = enteredLastName !== testLastName;
 
   if (isDefectDetected) {
-    console.error(`DEFECT DETECTED: Last Name field did not accept input! (Expected '${testLastName}', got '${enteredLastName}')`);
+    console.error(`[DEFECT DETECTED] Last Name field did not accept input! (Expected '${testLastName}', got '${enteredLastName}')`);
 
-    // 8. Capture screenshot evidence automatically with dynamic timestamp filename
+    // --- Evidence Collection ---
+    const timestamp = getLocalTimestamp();
     const screenshotsDir = path.resolve('screenshots');
     if (!fs.existsSync(screenshotsDir)) {
       fs.mkdirSync(screenshotsDir, { recursive: true });
     }
-    
-    const timestamp = getLocalTimestamp();
+
+    // 8. Capture screenshot evidence
     const screenshotFilename = `BUG-WEB-002-${timestamp}.png`;
     const screenshotPath = path.join(screenshotsDir, screenshotFilename);
     
-    console.log('Capturing screenshot evidence...');
+    console.log('[Step 8] Capturing screenshot evidence...');
     await page.screenshot({ path: screenshotPath, fullPage: true });
     
-    // Verify screenshot file is fully saved and stable on disk
-    console.log(`Verifying screenshot storage stability: ${screenshotPath}`);
+    console.log('[Step 8] Verifying screenshot storage stability...');
     await verifyFileStability(screenshotPath);
-    console.log('Screenshot storage verified and stabilized successfully.');
+    console.log('[Step 8] ✅ Screenshot captured and verified successfully.');
 
-    // 9. Automatically create ClickUp task and upload attachment
-    if (process.env.CLICKUP_API_TOKEN && process.env.CLICKUP_LIST_ID) {
-      try {
-        console.log('Reporting defect to ClickUp API...');
-        const taskId = await createDefectTask(BUG_INFO);
-        console.log(`ClickUp defect task created successfully. Task ID: ${taskId}`);
+    // 9. Save Playwright video evidence
+    console.log('[Step 9] Saving Playwright video evidence...');
+    const videoFilename = `BUG-WEB-002-${timestamp}.webm`;
+    const videoPath = path.join(screenshotsDir, videoFilename);
 
-        console.log(`Uploading screenshot to ClickUp task ${taskId} as evidence...`);
-        await uploadAttachment(taskId, screenshotPath);
-        console.log('Screenshot uploaded and attached to ClickUp task successfully.');
-      } catch (clickupError) {
-        console.error('An error occurred during ClickUp integration:', clickupError.message);
-      }
+    // Get the video reference before closing the context
+    const videoObj = page.video();
+    
+    // Close the browser context to finish recording and save the video file
+    await page.context().close();
+    
+    if (videoObj) {
+      await videoObj.saveAs(videoPath);
+      console.log('[Step 9] Verifying video file stability...');
+      await verifyFileStability(videoPath, 20, 500);
+      console.log('[Step 9] ✅ Video evidence saved and verified successfully.');
     } else {
-      console.warn('ClickUp environment variables are not fully configured in .env. Task creation skipped.');
+      console.warn('[Step 9] ⚠️ Playwright native video recording is not available.');
     }
 
-    // 10. Fail the test indicating the defect was found
+    // --- MinIO Upload & ClickUp Integration ---
+    const hasClickUpEnv = process.env.CLICKUP_API_TOKEN && process.env.CLICKUP_LIST_ID;
+    const hasMinioEnv = process.env.MINIO_ENDPOINT && process.env.MINIO_ACCESS_KEY && process.env.MINIO_BUCKET;
+
+    let screenshotPresignedUrl = 'N/A (MinIO not configured)';
+    let videoPresignedUrl = 'N/A (MinIO not configured)';
+
+    // 10. Upload evidence to MinIO
+    if (hasMinioEnv) {
+      try {
+        console.log('[Step 10] Uploading screenshot to MinIO...');
+        const screenshotResult = await uploadFile(`screenshots/${screenshotFilename}`, screenshotPath);
+        screenshotPresignedUrl = screenshotResult.presignedUrl;
+        console.log('[Step 10] ✅ Screenshot uploaded to MinIO successfully.');
+
+        console.log('[Step 10] Uploading video to MinIO...');
+        const videoResult = await uploadFile(`videos/${videoFilename}`, videoPath);
+        videoPresignedUrl = videoResult.presignedUrl;
+        console.log('[Step 10] ✅ Video uploaded to MinIO successfully.');
+      } catch (minioError) {
+        console.error('[Step 10] ❌ MinIO upload error:', minioError.message);
+      }
+    } else {
+      console.warn('[Step 10] ⚠️ MinIO environment variables are not configured. Upload skipped.');
+    }
+
+    // 11. Create or Update ClickUp defect task (with duplicate prevention)
+    if (hasClickUpEnv) {
+      try {
+        // Build the full defect description with evidence URLs
+        const defectDescription = buildDefectDescription(BUG_INFO, screenshotPresignedUrl, videoPresignedUrl, timestamp);
+
+        // Check for existing task to prevent duplicates
+        console.log(`[Step 11] Checking ClickUp for existing task with Bug ID: ${BUG_INFO.id}...`);
+        const existingTask = await getExistingTask(BUG_INFO.id);
+
+        let taskId;
+
+        if (existingTask) {
+          // Update existing task
+          taskId = existingTask.id;
+          console.log(`[Step 11] Found existing ClickUp task (ID: ${taskId}). Updating description...`);
+          await updateDefectTask(taskId, defectDescription);
+          console.log('[Step 11] ✅ Existing ClickUp task updated with latest evidence URLs.');
+        } else {
+          // Create new task
+          console.log('[Step 11] No existing task found. Creating new ClickUp defect task...');
+          taskId = await createDefectTask(BUG_INFO, defectDescription);
+          console.log(`[Step 11] ✅ New ClickUp defect task created. Task ID: ${taskId}`);
+        }
+
+        // Upload screenshot as direct attachment to ClickUp task
+        try {
+          console.log(`[Step 11] Uploading screenshot as attachment to ClickUp task ${taskId}...`);
+          await uploadAttachment(taskId, screenshotPath);
+          console.log('[Step 11] ✅ Screenshot attached to ClickUp task successfully.');
+        } catch (attachError) {
+          console.error('[Step 11] ❌ Screenshot attachment error:', attachError.message);
+        }
+
+      } catch (clickupError) {
+        console.error('[Step 11] ❌ ClickUp integration error:', clickupError.message);
+      }
+    } else {
+      console.warn('[Step 11] ⚠️ ClickUp environment variables are not configured. Task creation skipped.');
+    }
+
+    // 12. Fail the test indicating the defect was found
     expect(enteredLastName, 'Last Name field should have successfully accepted input').toBe(testLastName);
   } else {
     // If the defect is ever resolved, this assertion ensures the test passes cleanly

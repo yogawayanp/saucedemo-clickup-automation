@@ -38,6 +38,42 @@ function maskSecrets(message) {
 }
 
 /**
+ * Searches the configured ClickUp list for an existing task matching the given Bug ID.
+ * Returns the task object if found, or null if no match exists.
+ * @param {string} bugId - The Bug ID to search for (e.g. 'BUG-WEB-002')
+ * @returns {Promise<Object|null>} The matching ClickUp task object, or null
+ */
+export async function getExistingTask(bugId) {
+  validateEnv();
+
+  const url = `https://api.clickup.com/api/v2/list/${CLICKUP_LIST_ID}/task?include_closed=true`;
+
+  try {
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        'Authorization': CLICKUP_API_TOKEN
+      },
+      signal: AbortSignal.timeout(15000)
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`ClickUp API Error (Status ${response.status}): ${errorText}`);
+    }
+
+    const data = await response.json();
+    const tasks = data.tasks || [];
+
+    // Search for a task whose name contains the Bug ID
+    const existingTask = tasks.find(task => task.name && task.name.includes(bugId));
+    return existingTask || null;
+  } catch (error) {
+    throw new Error(`Failed to search ClickUp tasks: ${maskSecrets(error.message)}`);
+  }
+}
+
+/**
  * Creates a defect task in ClickUp.
  * @param {Object} bugDetails
  * @param {string} bugDetails.id - Defect ID (e.g. BUG-WEB-002)
@@ -48,15 +84,16 @@ function maskSecrets(message) {
  * @param {string[]} bugDetails.steps - Steps to reproduce the bug
  * @param {string} bugDetails.expected - The expected outcome
  * @param {string} bugDetails.actual - The actual outcome
+ * @param {string} [description] - Optional pre-formatted description (overrides default formatting)
  * @returns {Promise<string>} The created ClickUp Task ID
  */
-export async function createDefectTask(bugDetails) {
+export async function createDefectTask(bugDetails, description) {
   validateEnv();
 
   const url = `https://api.clickup.com/api/v2/list/${CLICKUP_LIST_ID}/task`;
 
-  // Format the defect description precisely as required
-  const description = `${bugDetails.id} - ${bugDetails.title}
+  // Use provided description or fall back to default formatting
+  const taskDescription = description || `${bugDetails.id} - ${bugDetails.title}
 
 Severity: ${bugDetails.severity}
 Priority: ${bugDetails.priority}
@@ -73,7 +110,7 @@ ${bugDetails.actual}`;
 
   const requestBody = {
     name: `${bugDetails.id} - ${bugDetails.title}`,
-    description: description,
+    description: taskDescription,
     status: 'to do',
     priority: 2 // 2 corresponds to "High" priority in ClickUp
   };
@@ -85,7 +122,8 @@ ${bugDetails.actual}`;
         'Authorization': CLICKUP_API_TOKEN,
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify(requestBody)
+      body: JSON.stringify(requestBody),
+      signal: AbortSignal.timeout(15000)
     });
 
     if (!response.ok) {
@@ -104,6 +142,43 @@ ${bugDetails.actual}`;
 }
 
 /**
+ * Updates an existing ClickUp task's description.
+ * @param {string} taskId - ClickUp Task ID
+ * @param {string} description - The new task description
+ * @returns {Promise<Object>} API JSON response
+ */
+export async function updateDefectTask(taskId, description) {
+  validateEnv();
+
+  const url = `https://api.clickup.com/api/v2/task/${taskId}`;
+
+  const requestBody = {
+    description: description
+  };
+
+  try {
+    const response = await fetch(url, {
+      method: 'PUT',
+      headers: {
+        'Authorization': CLICKUP_API_TOKEN,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(requestBody),
+      signal: AbortSignal.timeout(15000)
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`ClickUp API Error (Status ${response.status}): ${errorText}`);
+    }
+
+    return await response.json();
+  } catch (error) {
+    throw new Error(`Failed to update ClickUp task ${taskId}: ${maskSecrets(error.message)}`);
+  }
+}
+
+/**
  * Uploads a screenshot as an attachment to an existing ClickUp task.
  * @param {string} taskId - ClickUp Task ID
  * @param {string} filePath - Absolute path to the screenshot image file
@@ -118,7 +193,12 @@ export async function uploadAttachment(taskId, filePath) {
 
   const url = `https://api.clickup.com/api/v2/task/${taskId}/attachment`;
 
-  try {
+  // Create a 15-second timeout promise
+  const timeoutPromise = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error('ClickUp attachment upload timed out after 15 seconds.')), 15000)
+  );
+
+  const uploadPromise = (async () => {
     const fileBuffer = fs.readFileSync(filePath);
     const fileBlob = new Blob([fileBuffer], { type: 'image/png' });
     
@@ -139,7 +219,7 @@ export async function uploadAttachment(taskId, filePath) {
     }
 
     return await response.json();
-  } catch (error) {
-    throw new Error(`Failed to upload attachment to ClickUp task ${taskId}: ${maskSecrets(error.message)}`);
-  }
+  })();
+
+  return Promise.race([uploadPromise, timeoutPromise]);
 }

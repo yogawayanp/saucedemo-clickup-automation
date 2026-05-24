@@ -12,5 +12,8 @@
     "@playwright/test": "^1.60.0",
     "@types/node": "^25.9.1",
     "dotenv": "^17.4.2"
+  },
+  "dependencies": {
+    "minio": "^8.0.7"
   }
 }
