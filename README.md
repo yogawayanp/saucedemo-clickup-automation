@@ -9,7 +9,7 @@ This repository contains a proof-of-concept QA automation workflow integration d
 - **Screenshot Evidence Capture**: Automatically takes high-resolution screenshots immediately upon defect detection to visually document the failure point.
 - **Video Evidence Recording**: Captures standard native Playwright video recordings covering the complete testing flow.
 - **MinIO Evidence Upload**: Stores evidence files (screenshots and videos) in a dedicated local MinIO object storage bucket.
-- **Presigned URL Generation**: Generates secure, time-limited presigned URLs for direct access to screenshot and video files without public exposure.
+- **Public URL Generation**: Generates clean public object URLs for direct access to screenshot and video files within the public-configured MinIO bucket.
 - **ClickUp Defect Task Creation**: Programmatically communicates with the ClickUp API to generate structured defect tasks containing the test results and evidence links.
 - **QA Workflow Automation Proof-of-Concept**: Integrates automated web testing, local object storage, and SaaS defect-tracking platforms into one cohesive, automated pipeline.
 
@@ -24,7 +24,7 @@ Screenshot + Video Evidence
         ↓
 Upload Evidence to MinIO
         ↓
-Generate Presigned URLs
+Generate Public URLs
         ↓
 Create ClickUp Defect Task
         ↓
@@ -49,13 +49,19 @@ To pull and start the local MinIO instance via Docker:
 2. **Create Bucket**:
    Navigate to the MinIO Console at `http://localhost:9001` (login with your configured access and secret keys) and create a bucket named `qa-evidence` (matching your `.env` configuration).
 
+3. **Configure Public Access**:
+   Configure the `qa-evidence` bucket access policy to public (read-only) in the MinIO Console to allow direct URL downloads for the evidence links.
+   
+   > [!NOTE]
+   > Setting the bucket to public is suitable for local demo evidence simplicity, but using a private bucket with secure presigned URLs is recommended for production-like workflows.
+
 ## Video Evidence Management
 
 This integration implements automated native video recording via Playwright to ensure comprehensive visual evidence of test execution:
 - **Playwright Native Video Recording**: Automatically configured in the Playwright environment to capture every frame of the session.
 - **Full Flow Recording**: Records the entire user journey, starting from the login process until the moment the checkout defect is detected.
 - **MinIO Upload**: Once the test completes, the generated video file is renamed using standard QA patterns and programmatically uploaded to the local MinIO storage.
-- **Evidence Link Insertion**: The workflow appends the secure, presigned video URL directly into the generated ClickUp defect task description, enabling reviewers to play back the execution flow in a single click.
+- **Evidence Link Insertion**: The workflow appends the clean, public video URL directly into the generated ClickUp defect task description, enabling reviewers to play back the execution flow in a single click.
 
 ## Configuration (.env)
 

@@ -50,10 +50,10 @@ function createMinioClient() {
 }
 
 /**
- * Uploads a file to the configured MinIO bucket and returns a presigned URL.
+ * Uploads a file to the configured MinIO bucket and returns a clean public URL.
  * @param {string} objectName - The object key name in the bucket (e.g., 'screenshots/BUG-WEB-002-2026-05-24.png')
  * @param {string} filePath - Absolute path to the local file to upload
- * @returns {Promise<{objectName: string, presignedUrl: string}>} Upload result with presigned URL
+ * @returns {Promise<{objectName: string, publicUrl: string}>} Upload result with public URL
  */
 export async function uploadFile(objectName, filePath) {
   if (!fs.existsSync(filePath)) {
@@ -82,8 +82,9 @@ export async function uploadFile(objectName, filePath) {
   const metaData = { 'Content-Type': contentType };
   await client.fPutObject(MINIO_BUCKET, objectName, filePath, metaData);
 
-  // Generate a presigned URL valid for 7 days (604800 seconds)
-  const presignedUrl = await client.presignedGetObject(MINIO_BUCKET, objectName, 7 * 24 * 60 * 60);
+  // Generate a clean public URL
+  const protocol = MINIO_USE_SSL ? 'https' : 'http';
+  const publicUrl = `${protocol}://${MINIO_ENDPOINT}:${MINIO_PORT}/${MINIO_BUCKET}/${objectName}`;
 
-  return { objectName, presignedUrl };
+  return { objectName, publicUrl };
 }

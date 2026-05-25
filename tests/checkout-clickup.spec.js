@@ -102,8 +102,8 @@ async function verifyFileStability(filePath, maxRetries = 20, intervalMs = 200) 
 /**
  * Builds a structured defect description including evidence URLs and timestamp.
  * @param {Object} bugInfo - Bug details object
- * @param {string} screenshotUrl - Presigned MinIO URL for the screenshot
- * @param {string} videoUrl - Presigned MinIO URL for the video
+ * @param {string} screenshotUrl - Public MinIO URL for the screenshot
+ * @param {string} videoUrl - Public MinIO URL for the video
  * @param {string} timestamp - Automation run timestamp
  * @returns {string} Formatted description
  */
@@ -256,23 +256,23 @@ test('SauceDemo Checkout - Detect Last Name Field Bug and Create ClickUp Defect'
     const hasClickUpEnv = process.env.CLICKUP_API_TOKEN && process.env.CLICKUP_LIST_ID;
     const hasMinioEnv = process.env.MINIO_ENDPOINT && process.env.MINIO_ACCESS_KEY && process.env.MINIO_BUCKET;
 
-    let screenshotPresignedUrl = 'N/A (MinIO not configured)';
-    let videoPresignedUrl = 'N/A (MinIO not configured)';
+    let screenshotUrl = 'N/A (MinIO not configured)';
+    let videoUrl = 'N/A (MinIO not configured)';
 
     // 10. Upload evidence to MinIO
     if (hasMinioEnv) {
       try {
         console.log('[Step 10] Uploading screenshot to MinIO...');
         const screenshotResult = await uploadFile(`screenshots/${screenshotFilename}`, screenshotPath);
-        screenshotPresignedUrl = screenshotResult.presignedUrl;
+        screenshotUrl = screenshotResult.publicUrl;
         console.log('screenshot uploaded to MinIO');
+        console.log('public screenshot URL generated');
 
         console.log('[Step 10] Uploading video to MinIO...');
         const videoResult = await uploadFile(`videos/${videoFilename}`, videoPath);
-        videoPresignedUrl = videoResult.presignedUrl;
+        videoUrl = videoResult.publicUrl;
         console.log('video uploaded to MinIO');
-        
-        console.log('presigned URLs generated');
+        console.log('public video URL generated');
       } catch (minioError) {
         console.error('[Step 10] ❌ MinIO upload error:', minioError.message);
       }
@@ -284,7 +284,7 @@ test('SauceDemo Checkout - Detect Last Name Field Bug and Create ClickUp Defect'
     if (hasClickUpEnv) {
       try {
         // Build the full defect description with evidence URLs and unique timestamp
-        const defectDescription = buildDefectDescription(BUG_INFO, screenshotPresignedUrl, videoPresignedUrl, runTimestamp);
+        const defectDescription = buildDefectDescription(BUG_INFO, screenshotUrl, videoUrl, runTimestamp);
 
         // Always create a new task name incorporating the unique run timestamp
         const taskTitle = `[BUG-WEB-002] Last Name field cannot be typed on checkout form - Run ${runTimestamp}`;
